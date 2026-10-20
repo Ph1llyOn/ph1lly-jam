@@ -296,9 +296,13 @@ function setRoomUI(inside){
   $id('roomInside').style.display = inside ? '' : 'none';
   $id('roomStatus').textContent = inside ? 'connesso' : 'non connesso';
 }
+let peerCountShown = 1;
 function updateCount(){
   const cids = new Set([myCid, ...peerCids.values()]);
   $id('peerCount').textContent = String(cids.size);
+  if (cids.size >= 2 && peerCountShown < 2) roomMsg('Dispositivi collegati: la lista si sincronizza in tempo reale ✅');
+  if (cids.size < 2 && peerCountShown >= 2) roomMsg('Gli altri dispositivi sono usciti dalla stanza.');
+  peerCountShown = cids.size;
 }
 function broadcastState(){
   if (!senders.length) return;
@@ -357,7 +361,7 @@ async function startRoom(code){
   const u = new URL(location.href); u.searchParams.set('stanza', code); history.replaceState(null, '', u);
   $id('roomCodeShow').textContent = code;
   setRoomUI(true); updateCount();
-  roomMsg('Stanza attiva: le modifiche arrivano a tutti in tempo reale.');
+  roomMsg('Stanza creata: condividi l\'invito e, appena entra qualcun altro, la lista si sincronizza in tempo reale.');
 }
 function genCode(){
   const words = ['MUSICA','JAM','FESTA','NOTTE','LIVE','SUONO','ONDA','RITMO'];
