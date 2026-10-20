@@ -40,6 +40,7 @@ button:disabled{opacity:.45;cursor:default}
 .bottomactions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 .disclaimer{font-size:11px;color:#8c8c9b;margin:24px 4px 0}
 .toast{position:sticky;bottom:10px;background:#292933;border:1px solid #4a4a58;border-radius:12px;padding:10px 14px;margin-top:10px;display:none;font-size:13px}
+#roomCode{text-transform:uppercase}
 @media(max-width:520px){main{padding:18px 12px 32px}header{gap:10px}.tag{display:none}.card{padding:14px}.searchrow{flex-direction:column}.searchrow button{width:100%}.song{gap:9px}.art{width:46px;height:46px}.actions{flex-direction:column}.actions button{padding:8px}}
 </style>
 </head>
@@ -48,7 +49,7 @@ button:disabled{opacity:.45;cursor:default}
 <header>
   <div class="logo" aria-hidden="true">♫</div>
   <div><h1>Ph1lly Jam</h1><p class="subtitle">tu scegli il prossimo pezzo · zero account per gli amici</p></div>
-  <div class="tag">BETA · v0.1</div>
+  <div class="tag">BETA · v2</div>
 </header>
 
 <section class="card">
@@ -60,6 +61,30 @@ button:disabled{opacity:.45;cursor:default}
   <p class="note">Cerca nel catalogo pubblico Apple. Devis non deve accedere con un account per suggerire brani.</p>
   <div id="status" class="status" role="status" aria-live="polite"></div>
   <div id="results" class="results"></div>
+</section>
+
+<section class="card" id="roomCard">
+  <div class="rowbetween"><h2>📡 Stanza live</h2><span class="count" id="roomStatus">non connesso</span></div>
+  <p class="note">Con la stanza la lista si aggiorna in tempo reale su tutti i telefoni collegati. Niente server e niente account: i telefoni si parlano direttamente.</p>
+  <div id="roomJoin">
+    <div class="searchrow">
+      <input id="roomCode" type="text" placeholder="Codice stanza (es. MUSICA42)" autocomplete="off" autocapitalize="characters" maxlength="12">
+      <button id="joinRoomBtn" type="button">Entra</button>
+    </div>
+    <div class="bottomactions">
+      <button id="createRoomBtn" type="button">＋ Crea una stanza</button>
+    </div>
+    <p class="note">Crea una stanza e manda il link di invito: chi lo apre entra automaticamente.</p>
+  </div>
+  <div id="roomInside" style="display:none">
+    <p class="note">Codice stanza: <strong id="roomCodeShow"></strong> · dispositivi in stanza: <strong id="peerCount">1</strong></p>
+    <div class="bottomactions">
+      <button id="inviteBtn" type="button">↗ Condividi invito</button>
+      <button id="leaveRoomBtn" type="button" class="secondary">Esci dalla stanza</button>
+    </div>
+    <p class="note">La sincronizzazione funziona mentre la pagina è aperta su almeno un altro telefono della stanza.</p>
+  </div>
+  <div id="roomMsg" class="status" role="status" aria-live="polite"></div>
 </section>
 
 <section class="card">
@@ -77,10 +102,11 @@ button:disabled{opacity:.45;cursor:default}
 <section class="card">
   <h2>Come usarlo domani</h2>
   <ol style="padding-left:20px;margin-bottom:0;color:#d5d5df">
-    <li>Tu apri il sito e cerchi i brani.</li>
-    <li>Devis apre lo stesso link dal suo Android e può cercare brani.</li>
-    <li>Chi aggiunge un brano condivide il link aggiornato.</li>
-    <li>Tu tocchi “Apri in Apple Music” per ogni brano e lo aggiungi alla coda nell'app Musica.</li>
+    <li>Tu crei una stanza dalla sezione “Stanza live” e condividi il link di invito.</li>
+    <li>Devis lo apre dal suo Android: entra nella stanza da solo, senza account.</li>
+    <li>Ognuno cerca e aggiunge brani: la lista si aggiorna in tempo reale su tutti i telefoni.</li>
+    <li>Tu tocchi “Apri” sui brani e li aggiungi alla coda nell'app Musica.</li>
+    <li>Senza stanza, funziona come prima: lista nel link da condividere a mano.</li>
   </ol>
 </section>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -90,6 +116,7 @@ button:disabled{opacity:.45;cursor:default}
 const $ = id => document.getElementById(id);
 let songs = [];
 let searchResults = [];
+let stateMeta = {v:0, ts:0};
 
 function toast(message) {
   const el = $('toast'); el.textContent = message; el.style.display = 'block';
@@ -142,7 +169,11 @@ function renderQueue() {
     actions.append(open,up,remove); row.append(img,info,actions); root.append(row);
   });
 }
-function changed(){saveHash();renderQueue();}
+function changed(){
+  stateMeta = {v: stateMeta.v+1, ts: Date.now()};
+  saveHash(); renderQueue();
+  if (window.jamBroadcast) window.jamBroadcast();
+}
 function addSong(s) {
   if (songs.some(x=>String(x.id)===String(s.id))) { toast('Questo brano è già nella lista.'); return; }
   songs.push(s); changed(); toast('Aggiunto alla lista!');
@@ -221,6 +252,119 @@ $('clearBtn').addEventListener('click',()=>{
   if(confirm('Svuotare tutta la lista?')){songs=[];changed();toast('Lista svuotata.');}
 });
 decodeState();renderQueue();
+// --- Ganci per la sincronizzazione live (modulo stanza) ---
+window.jamGetState = () => ({songs, meta: stateMeta});
+window.jamApplyRemote = (remoteSongs, remoteMeta) => {
+  if (!Array.isArray(remoteSongs) || !remoteMeta) return false;
+  const clean = remoteSongs.filter(s => s && s.title && s.url && s.id).slice(0,100);
+  const newer = remoteMeta.v > stateMeta.v || (remoteMeta.v === stateMeta.v && remoteMeta.ts > stateMeta.ts);
+  if (newer) {
+    songs = clean;
+    stateMeta = {v: remoteMeta.v, ts: remoteMeta.ts};
+    saveHash(); renderQueue(); toast('Lista aggiornata dalla stanza 🔄');
+    return true;
+  }
+  const sameGen = remoteMeta.v === stateMeta.v && remoteMeta.ts === stateMeta.ts;
+  if (sameGen) {
+    const ids = new Set(songs.map(s => String(s.id)));
+    const extras = clean.filter(s => !ids.has(String(s.id)));
+    if (extras.length) {
+      songs = [...songs, ...extras].slice(0,100);
+      stateMeta = {v: stateMeta.v+1, ts: Date.now()};
+      saveHash(); renderQueue(); toast('Liste unite con la stanza 🤝');
+      if (window.jamBroadcast) window.jamBroadcast();
+      return true;
+    }
+  }
+  return false;
+};
+</script>
+<script type="module">
+const $id = id => document.getElementById(id);
+const APP_ID = 'ph1lly-jam-v2';
+let room = null, sendState = null, myCode = '';
+
+function roomMsg(t){ const el = $id('roomMsg'); if (el) el.textContent = t || ''; }
+function setRoomUI(inside){
+  $id('roomJoin').style.display = inside ? 'none' : '';
+  $id('roomInside').style.display = inside ? '' : 'none';
+  $id('roomStatus').textContent = inside ? 'connesso' : 'non connesso';
+}
+async function startRoom(code){
+  myCode = code;
+  roomMsg('Connessione alla stanza…');
+  let trystero = null;
+  try { trystero = await import('https://cdn.jsdelivr.net/npm/trystero@0.21.0/+esm'); }
+  catch {
+    try { trystero = await import('https://esm.sh/trystero@0.21.0'); } catch {}
+  }
+  if (!trystero) { roomMsg('Sync live non disponibile su questo browser o rete: usa “Condividi lista”.'); return; }
+  const {joinRoom} = trystero;
+  room = joinRoom({appId: APP_ID}, code);
+  const [sendS, getS] = room.makeAction('state');
+  const [sendH, getH] = room.makeAction('hello');
+  sendState = sendS;
+  window.jamBroadcast = () => {
+    if (!sendState) return;
+    const st = window.jamGetState();
+    try { sendState({songs: st.songs, meta: st.meta}); } catch {}
+  };
+  getS((data) => { if (data) window.jamApplyRemote(data.songs, data.meta); });
+  getH((meta, peerId) => {
+    if (!meta) return;
+    const mine = window.jamGetState().meta;
+    if (mine.v > meta.v || (mine.v === meta.v && mine.ts > meta.ts)) {
+      const st = window.jamGetState();
+      try { sendState({songs: st.songs, meta: st.meta}, peerId); } catch {}
+    }
+  });
+  const updatePeers = () => { $id('peerCount').textContent = String(Object.keys(room.getPeers()).length + 1); };
+  room.onPeerJoin((peerId) => {
+    updatePeers();
+    const st = window.jamGetState();
+    try { sendH(st.meta, peerId); } catch {}
+    roomMsg('Un dispositivo si è unito alla stanza 👋');
+  });
+  room.onPeerLeave(() => { updatePeers(); });
+  try { localStorage.setItem('ph1llyjam.room', code); } catch {}
+  const u = new URL(location.href); u.searchParams.set('stanza', code); history.replaceState(null, '', u);
+  $id('roomCodeShow').textContent = code;
+  setRoomUI(true); updatePeers();
+  roomMsg('Stanza attiva: le modifiche arrivano a tutti in tempo reale.');
+}
+function genCode(){
+  const words = ['MUSICA','JAM','FESTA','NOTTE','LIVE','SUONO','ONDA','RITMO'];
+  return words[Math.floor(Math.random()*words.length)] + Math.floor(10 + Math.random()*90);
+}
+$id('createRoomBtn').addEventListener('click', () => { if (!room) startRoom(genCode()); });
+$id('joinRoomBtn').addEventListener('click', () => {
+  const code = ($id('roomCode').value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if (code.length < 4) { roomMsg('Inserisci un codice stanza valido (almeno 4 caratteri).'); return; }
+  if (!room) startRoom(code);
+});
+$id('leaveRoomBtn').addEventListener('click', () => {
+  if (room) { try { room.leave(); } catch {} }
+  room = null; sendState = null; window.jamBroadcast = null;
+  const u = new URL(location.href); u.searchParams.delete('stanza'); history.replaceState(null, '', u);
+  try { localStorage.removeItem('ph1llyjam.room'); } catch {}
+  setRoomUI(false); roomMsg('Sei uscito dalla stanza. La lista resta su questo telefono.');
+});
+$id('inviteBtn').addEventListener('click', async () => {
+  const link = location.href;
+  try {
+    if (navigator.share) await navigator.share({title:'Ph1lly Jam — stanza live', text:'Entra nella mia stanza Ph1lly Jam e aggiungi brani alla lista:', url: link});
+    else if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(link); toast('Link di invito copiato!'); }
+    else prompt('Copia questo link di invito:', link);
+  } catch(e) { if (e.name !== 'AbortError') prompt('Copia questo link di invito:', link); }
+});
+const fromUrl = (new URLSearchParams(location.search).get('stanza') || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+if (fromUrl.length >= 4) startRoom(fromUrl);
+else {
+  try {
+    const saved = localStorage.getItem('ph1llyjam.room');
+    if (saved) $id('roomCode').value = saved;
+  } catch {}
+}
 </script>
 </body>
 </html>
