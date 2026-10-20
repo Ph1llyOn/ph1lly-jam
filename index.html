@@ -182,7 +182,7 @@ function renderResults(items) {
   searchResults = items;
   const root = $('results'); root.replaceChildren();
   if (!items.length) { root.innerHTML='<div class="empty">Nessun risultato. Prova con un altro titolo o artista.</div>'; return; }
-  items.slice(0,25).forEach((s,i)=>{
+  items.slice(0,30).forEach((s,i)=>{
     const row=document.createElement('div');row.className='song';
     const img=document.createElement('img');img.className='art';img.alt='';if (s.artworkUrl100) img.src=artwork(s.artworkUrl100);img.loading='lazy';
     const info=document.createElement('div');info.className='songinfo';
@@ -195,34 +195,73 @@ function renderResults(items) {
   });
 }
 const norm = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+const NUMWORDS = {zero:'0',uno:'1',due:'2',tre:'3',quattro:'4',cinque:'5',sei:'6',sette:'7',otto:'8',nove:'9',dieci:'10',one:'1',two:'2',three:'3',four:'4',five:'5',six:'6',seven:'7',eight:'8',nine:'9',ten:'10'};
+const wordsOf = s => norm(s).split(/[^a-z0-9]+/).filter(Boolean);
+function tokenSet(q){
+  const base = wordsOf(q).filter(t=>t.length>=2);
+  const extra = [];
+  base.forEach(t=>{ if (NUMWORDS[t]) extra.push(NUMWORDS[t]); });
+  return [...new Set([...base, ...extra])];
+}
 async function fetchJson(url){ const r = await fetch(url); if(!r.ok) throw new Error('http '+r.status); return r.json(); }
 async function searchCatalog(q){
-  const tokens = [...new Set(norm(q).split(/[^a-z0-9]+/).filter(t=>t.length>=2))];
+  const tokens = tokenSet(q);
   const base = 'https://itunes.apple.com';
   const songSearch = fetchJson(base+'/search?term='+encodeURIComponent(q)+'&entity=song&limit=50&country=it').then(d=>d.results||[]).catch(()=>[]);
-  const artistIds = new Set();
-  const variants = [...new Set([q, ...norm(q).split(/[^a-z0-9]+/).filter(t=>t.length>=2)])].slice(0,4);
-  await Promise.all(variants.map(v =>
-    fetchJson(base+'/search?term='+encodeURIComponent(v)+'&entity=musicArtist&limit=5&country=it')
-      .then(d=>{(d.results||[]).forEach(a=>{ if(a.artistId && artistIds.size<6) artistIds.add(a.artistId); });})
-      .catch(()=>{})
+  const variants = [...new Set([q, ...wordsOf(q).filter(t=>t.length>=2)])].slice(0,5);
+  const artistLists = await Promise.all(variants.map(v =>
+    fetchJson(base+'/search?term='+encodeURIComponent(v)+'&entity=musicArtist&limit=5&country=it').then(d=>d.results||[]).catch(()=>[])
   ));
+  const flat = artistLists.flat();
+  flat.sort((a,b)=>{
+    const hit = x => wordsOf(x.artistName).some(w=>tokens.includes(w)) ? 0 : 1;
+    return hit(a)-hit(b);
+  });
+  const artistIds = []; const seenArtist = new Set();
+  flat.forEach(a=>{ if (a.artistId && !seenArtist.has(a.artistId) && artistIds.length<8){ seenArtist.add(a.artistId); artistIds.push(a.artistId); } });
   const disco = [];
-  await Promise.all([...artistIds].map(id =>
+  await Promise.all(artistIds.map(id =>
     fetchJson(base+'/lookup?id='+id+'&entity=song&limit=200&country=it')
       .then(d=>{(d.results||[]).forEach(t=>{
-        if(t.wrapperType!=='track') return;
-        const hay = norm(t.trackName)+' '+norm(t.artistName);
-        if(tokens.some(tok=>hay.includes(tok))) disco.push(t);
+        if (t.wrapperType!=='track') return;
+        const tw = wordsOf(t.trackName), aw = wordsOf(t.artistName);
+        if (tokens.some(tok=>tw.includes(tok)) || tokens.some(tok=>aw.includes(tok))) disco.push(t);
       });})
       .catch(()=>{})
   ));
   const songs = await songSearch;
   const seen = new Set(); const merged = [];
-  [...songs, ...disco].forEach(t=>{ if(t.trackId && !seen.has(t.trackId)){ seen.add(t.trackId); merged.push(t); } });
-  const score = t => { const hay = norm(t.trackName)+' '+norm(t.artistName); return tokens.reduce((n,tok)=>n+(hay.includes(tok)?1:0),0); };
+  [...songs, ...disco].forEach(t=>{ if (t.trackId && !seen.has(t.trackId)){ seen.add(t.trackId); merged.push(t); } });
+  const keyOf = s => wordsOf(s).join(' ');
+  const qKey = keyOf(q);
+  const headline = t => (t.trackName || '').split('(')[0];
+  const score = t => {
+    const tw = wordsOf(headline(t)), aw = wordsOf(t.artistName);
+    const titleN = norm(t.trackName), artistN = norm(t.artistName);
+    let s = 0;
+    if (keyOf(headline(t)) === qKey) s += 100;
+    if (artistN === norm(q).trim()) s += 130;
+    if (/karaoke|tribute|originally performed/.test(titleN + ' ' + artistN)) s -= 30;
+    if (!tokens.includes('live') && /\(live|dal vivo|in concerto/.test(titleN)) s -= 5;
+    let matched = 0;
+    tokens.forEach(tok=>{
+      let m = false;
+      if (tw.includes(tok)) { s += 10; m = true; }
+      else if (titleN.includes(tok)) { s += 3; m = true; }
+      if (aw.includes(tok)) { s += 6; m = true; }
+      else if (artistN.includes(tok)) { s += 2; }
+      if (m) matched++;
+    });
+    if (tokens.length && matched === tokens.length) s += 25;
+    return s;
+  };
   merged.sort((a,b)=>score(b)-score(a));
-  return merged;
+  const deduped = []; const dseen = new Set();
+  merged.forEach(t=>{
+    const k = norm(t.trackName) + '|' + norm(t.artistName);
+    if (!dseen.has(k)) { dseen.add(k); deduped.push(t); }
+  });
+  return deduped;
 }
 $('searchForm').addEventListener('submit',async e=>{
   e.preventDefault();const q=$('query').value.trim();if(!q)return;
@@ -230,7 +269,7 @@ $('searchForm').addEventListener('submit',async e=>{
   try{
     const items = await searchCatalog(q);
     renderResults(items);
-    $('status').textContent=`Trovati ${items.length} risultati.`;
+    $('status').textContent = items.length > 30 ? `Trovati ${items.length} risultati: ti mostro i 30 più rilevanti.` : `Trovati ${items.length} risultati.`;
   }catch(err){$('status').textContent='Ricerca non riuscita. Controlla la connessione e riprova.';}
   finally{$('searchBtn').disabled=false;}
 });
