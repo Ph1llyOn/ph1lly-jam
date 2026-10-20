@@ -253,6 +253,15 @@ async function searchCatalog(q){
       if (m) matched++;
     });
     if (tokens.length && matched === tokens.length) s += 25;
+    // Regola "brano cercato": se l'inizio (o la fine) della ricerca e il titolo
+    // esatto e TUTTE le altre parole sono l'artista, e il brano giusto: primo posto.
+    const qWords = wordsOf(q);
+    const artistMatch = tok => aw.includes(tok) || artistN.includes(tok) || (NUMWORDS[tok] ? aw.some(w => w.startsWith(NUMWORDS[tok])) : false);
+    const headKey = keyOf(headline(t));
+    for (let k = 1; k < qWords.length; k++) {
+      if (headKey === qWords.slice(0, k).join(' ') && qWords.slice(k).every(artistMatch)) { s += 200; break; }
+      if (headKey === qWords.slice(qWords.length - k).join(' ') && qWords.slice(0, qWords.length - k).every(artistMatch)) { s += 200; break; }
+    }
     return s;
   };
   merged.sort((a,b)=>score(b)-score(a));
